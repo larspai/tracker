@@ -59,7 +59,9 @@ git branch -M main
 git push -u origin main
 ```
 
-If prompted, enter your GitHub username and password (or use a Personal Access Token).
+**Important:** GitHub no longer accepts passwords. You'll need to use a **Personal Access Token**:
+- When prompted for password, paste your Personal Access Token (NOT your GitHub password)
+- See `GITHUB_AUTH.md` for detailed instructions on creating a token
 
 ## Files That Will Be Uploaded
 

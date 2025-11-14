@@ -14,6 +14,8 @@ let currentPosition = null;
 let currentMarker = null;
 let trailCoordinates = [];
 let trailPolyline = null;
+let lastTrailPointTime = 0;
+const TRAIL_INTERVAL_MS = 1000; // Record point every 1 second
 
 // DOM elements
 const startBtn = document.getElementById('startBtn');
@@ -38,29 +40,45 @@ if (!navigator.geolocation) {
         }
     );
 
-    // Watch position for updates (for current position marker)
-    // Note: Trail points are handled by the Web Worker when recording
-    navigator.geolocation.watchPosition(
-        (position) => {
-            const { latitude, longitude } = position.coords;
-            currentPosition = { lat: latitude, lng: longitude };
-            updateCurrentPositionMarker(latitude, longitude);
-            
-            // Only add trail points if not using worker (fallback)
-            if (isRecording && !trackingWorker) {
-                addTrailPoint(latitude, longitude);
+    // Watch position for updates (for current position marker and trail)
+    let geolocationWatchId = null;
+    
+    function startGeolocationWatch() {
+        geolocationWatchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                const now = Date.now();
+                currentPosition = { lat: latitude, lng: longitude };
+                updateCurrentPositionMarker(latitude, longitude);
+                
+                // Add trail points when recording (every 1 second or when moved significantly)
+                if (isRecording) {
+                    const timeSinceLastPoint = now - lastTrailPointTime;
+                    const shouldRecord = timeSinceLastPoint >= TRAIL_INTERVAL_MS;
+                    
+                    if (shouldRecord) {
+                        addTrailPoint(latitude, longitude);
+                        lastTrailPointTime = now;
+                        
+                        // Update status with point count
+                        status.textContent = `Recording... (${trailCoordinates.length} points)`;
+                    }
+                }
+            },
+            (error) => {
+                console.error('Error watching position:', error);
+                status.textContent = 'Error: ' + error.message;
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 1000, // Accept cached position up to 1 second old
+                timeout: 5000
             }
-        },
-        (error) => {
-            console.error('Error watching position:', error);
-            status.textContent = 'Error: ' + error.message;
-        },
-        {
-            enableHighAccuracy: true,
-            maximumAge: 1000,
-            timeout: 5000
-        }
-    );
+        );
+    }
+    
+    // Start watching position
+    startGeolocationWatch();
 }
 
 // Update current position marker
@@ -175,6 +193,7 @@ function startRecording() {
     
     isRecording = true;
     trailCoordinates = [];
+    lastTrailPointTime = Date.now();
     
     // Remove existing trail if any
     if (trailPolyline) {
@@ -182,33 +201,9 @@ function startRecording() {
         trailPolyline = null;
     }
     
-    // Start web worker for background tracking
-    if (typeof Worker !== 'undefined') {
-        try {
-            trackingWorker = new Worker('tracking-worker.js');
-            
-            trackingWorker.onmessage = function(e) {
-                const data = e.data;
-                if (data.error) {
-                    console.error('Worker error:', data.error);
-                    // Fallback to main thread tracking
-                } else if (data.lat && data.lng) {
-                    addTrailPoint(data.lat, data.lng);
-                }
-            };
-            
-            trackingWorker.onerror = function(error) {
-                console.error('Worker error:', error);
-                // Fallback: continue tracking in main thread
-            };
-            
-            // Send start command to worker
-            trackingWorker.postMessage({ command: 'start' });
-        } catch (error) {
-            console.error('Failed to create worker:', error);
-            // Fallback: continue tracking in main thread
-        }
-    }
+    // Note: Web Workers cannot access Geolocation API in browsers
+    // Tracking happens in main thread via watchPosition (already running)
+    // The worker file exists but geolocation must be handled in main thread
     
     // Update UI
     startBtn.disabled = true;
@@ -219,6 +214,7 @@ function startRecording() {
     // Add current position as first point
     if (currentPosition) {
         addTrailPoint(currentPosition.lat, currentPosition.lng);
+        lastTrailPointTime = Date.now();
     }
 }
 
@@ -227,13 +223,6 @@ function stopRecording() {
     if (!isRecording) return;
     
     isRecording = false;
-    
-    // Stop and terminate worker
-    if (trackingWorker) {
-        trackingWorker.postMessage({ command: 'stop' });
-        trackingWorker.terminate();
-        trackingWorker = null;
-    }
     
     // Update UI
     startBtn.disabled = false;
@@ -253,9 +242,14 @@ stopBtn.addEventListener('click', stopRecording);
 
 // Handle page visibility changes (for background tracking)
 document.addEventListener('visibilitychange', function() {
-    if (isRecording && trackingWorker) {
-        // Worker continues running even when page is in background
-        console.log('Page visibility changed, worker continues');
+    if (isRecording) {
+        if (document.hidden) {
+            console.log('Page hidden - tracking continues');
+            status.textContent = `Recording in background... (${trailCoordinates.length} points)`;
+        } else {
+            console.log('Page visible - tracking active');
+            status.textContent = `Recording... (${trailCoordinates.length} points)`;
+        }
     }
 });
 
